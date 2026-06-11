@@ -44,6 +44,7 @@ from nailgun.entity_mixins import (
     _poll_task,
     to_json_serializable,  # noqa: F401
 )
+from nailgun.features import VersionFeatureChecker
 
 # The size of this file is a direct reflection of the size of Satellite's API.
 # This file's size has already been significantly cut down through the use of
@@ -198,204 +199,6 @@ def _feature_list(server_config, smart_proxy_id=1):
     """Get list of features enabled on capsule."""
     smart_proxy = SmartProxy(server_config=server_config, id=smart_proxy_id).read_json()
     return [feature['name'] for feature in smart_proxy['features']]
-
-
-class ActivationKey(
-    Entity,
-    EntityCreateMixin,
-    EntityDeleteMixin,
-    EntityReadMixin,
-    EntitySearchMixin,
-    EntityUpdateMixin,
-):
-    """A representation of a Activation Key entity."""
-
-    def __init__(self, server_config=None, **kwargs):
-        self._fields = {
-            'content_view_environment_ids': entity_fields.ListField(),
-            'description': entity_fields.StringField(),
-            'host_collection': entity_fields.OneToManyField(HostCollection),
-            'max_hosts': entity_fields.IntegerField(),
-            'name': entity_fields.StringField(
-                required=True, str_type='alpha', length=(6, 12), unique=True
-            ),
-            'organization': entity_fields.OneToOneField(
-                Organization,
-                required=True,
-            ),
-            'purpose_usage': entity_fields.StringField(),
-            'purpose_role': entity_fields.StringField(),
-            'release_version': entity_fields.StringField(),
-            'service_level': entity_fields.StringField(),
-            'unlimited_hosts': entity_fields.BooleanField(),
-        }
-        self._meta = {
-            'api_path': 'katello/api/v2/activation_keys',
-        }
-        super().__init__(server_config=server_config, **kwargs)
-
-    def path(self, which=None):
-        """Extend ``nailgun.entity_mixins.Entity.path``.
-
-        The format of the returned path depends on the value of ``which``:
-
-        copy
-            /activation_keys/<id>/copy
-        content_override
-            /activation_keys/<id>/content_override
-        product_content
-            /activation_keys/<id>/product_content
-        releases
-            /activation_keys/<id>/releases
-
-        ``super`` is called otherwise.
-
-        """
-        if which in (
-            'content_override',
-            'copy',
-            'host_collections',
-            'product_content',
-            'releases',
-        ):
-            return f'{super().path(which="self")}/{which}'
-        return super().path(which)
-
-    def read(self, entity=None, attrs=None, ignore=None, params=None):
-        """Handle the content_view_environments response format."""
-        if attrs is None:
-            attrs = self.read_json(params=params)
-        if ignore is None:
-            ignore = set()
-        ignore.add('content_view_environment_ids')
-        entity = super().read(entity, attrs, ignore, params)
-        entity.content_view_environments = attrs.get('content_view_environments', [])
-        return entity
-
-    @property
-    def content_view(self):
-        """Backward-compat: extract the first content view from content_view_environments."""
-        cvenvs = getattr(self, 'content_view_environments', None)
-        if not cvenvs:
-            return None
-        cv_data = cvenvs[0].get('content_view')
-        if not cv_data:
-            return None
-        return ContentView(server_config=self._server_config, id=cv_data['id'])
-
-    @property
-    def environment(self):
-        """Backward-compat: extract the first lifecycle environment from content_view_environments."""
-        cvenvs = getattr(self, 'content_view_environments', None)
-        if not cvenvs:
-            return None
-        lce_data = cvenvs[0].get('lifecycle_environment')
-        if not lce_data:
-            return None
-        return LifecycleEnvironment(server_config=self._server_config, id=lce_data['id'])
-
-    def update_payload(self, fields=None):
-        """Include organization_id in all payloads."""
-        payload = super().update_payload(fields)
-        payload['organization_id'] = self.organization.id
-        return payload
-
-    def add_host_collection(self, synchronous=True, timeout=None, **kwargs):
-        """Associate host collection with activation key.
-
-        :param synchronous: What should happen if the server returns an HTTP
-            202 (accepted) status code? Wait for the task to complete if
-            ``True``. Immediately return the server's response otherwise.
-        :param timeout: Maximum number of seconds to wait until timing out.
-            Defaults to ``nailgun.entity_mixins.TASK_TIMEOUT``.
-        :param kwargs: Arguments to pass to requests.
-        :returns: The server's response, with all JSON decoded.
-        :raises: ``requests.exceptions.HTTPError`` If the server responds with
-            an HTTP 4XX or 5XX message.
-
-        """
-        kwargs = kwargs.copy()  # shadow the passed-in kwargs
-        kwargs.update(self._server_config.get_client_kwargs())
-        response = client.post(self.path('host_collections'), **kwargs)
-        return _handle_response(response, self._server_config, synchronous, timeout)
-
-    def copy(self, synchronous=True, timeout=None, **kwargs):
-        """Copy provided activation key.
-
-        :param synchronous: What should happen if the server returns an HTTP
-            202 (accepted) status code? Wait for the task to complete if
-            ``True``. Immediately return the server's response otherwise.
-        :param timeout: Maximum number of seconds to wait until timing out.
-            Defaults to ``nailgun.entity_mixins.TASK_TIMEOUT``.
-        :param kwargs: Arguments to pass to requests.
-        :returns: The server's response, with all JSON decoded.
-        :raises: ``requests.exceptions.HTTPError`` If the server responds with
-            an HTTP 4XX or 5XX message.
-
-        """
-        kwargs = kwargs.copy()  # shadow the passed-in kwargs
-        if 'data' in kwargs and 'id' not in kwargs['data']:
-            kwargs['data']['id'] = self.id
-        kwargs.update(self._server_config.get_client_kwargs())
-        response = client.post(self.path('copy'), **kwargs)
-        return _handle_response(response, self._server_config, synchronous, timeout)
-
-    def content_override(self, synchronous=True, timeout=None, **kwargs):
-        """Override the content of an activation key.
-
-        :param synchronous: What should happen if the server returns an HTTP
-            202 (accepted) status code? Wait for the task to complete if
-            ``True``. Immediately return the server's response otherwise.
-        :param timeout: Maximum number of seconds to wait until timing out.
-            Defaults to ``nailgun.entity_mixins.TASK_TIMEOUT``.
-        :param kwargs: Arguments to pass to requests.
-        :returns: The server's response, with all JSON decoded.
-        :raises: ``requests.exceptions.HTTPError`` If the server responds with
-            an HTTP 4XX or 5XX message.
-
-        """
-        kwargs = kwargs.copy()  # shadow the passed-in kwargs
-        kwargs.update(self._server_config.get_client_kwargs())
-        response = client.put(self.path('content_override'), **kwargs)
-        return _handle_response(response, self._server_config, synchronous, timeout)
-
-    def product_content(self, synchronous=True, timeout=None, **kwargs):
-        """Show content available for activation key.
-
-        :param synchronous: What should happen if the server returns an HTTP
-            202 (accepted) status code? Wait for the task to complete if
-            ``True``. Immediately return the server's response otherwise.
-        :param timeout: Maximum number of seconds to wait until timing out.
-            Defaults to ``nailgun.entity_mixins.TASK_TIMEOUT``.
-        :param kwargs: Arguments to pass to requests.
-        :returns: The server's response, with all JSON decoded.
-        :raises: ``requests.exceptions.HTTPError`` If the server responds with
-            an HTTP 4XX or 5XX message.
-
-        """
-        kwargs = kwargs.copy()  # shadow the passed-in kwargs
-        kwargs.update(self._server_config.get_client_kwargs())
-        response = client.get(self.path('product_content'), **kwargs)
-        return _handle_response(response, self._server_config, synchronous, timeout)
-
-    def remove_host_collection(self, synchronous=True, timeout=None, **kwargs):
-        """Disassociate host collection from the activation key.
-
-        :param synchronous: What should happen if the server returns an HTTP
-            202 (accepted) status code? Wait for the task to complete if
-            ``True``. Immediately return the server's response otherwise.
-        :param timeout: Maximum number of seconds to wait until timing out.
-            Defaults to ``nailgun.entity_mixins.TASK_TIMEOUT``.
-        :param kwargs: Arguments to pass to requests.
-        :returns: The server's response, with all JSON decoded.
-        :raises: ``requests.exceptions.HTTPError`` If the server responds with
-            an HTTP 4XX or 5XX message.
-
-        """
-        kwargs = kwargs.copy()  # shadow the passed-in kwargs
-        kwargs.update(self._server_config.get_client_kwargs())
-        response = client.put(self.path('host_collections'), **kwargs)
-        return _handle_response(response, self._server_config, synchronous, timeout)
 
 
 class AlternateContentSource(
@@ -5678,6 +5481,286 @@ class LifecycleEnvironment(
                     f'organization {self.organization}. Search results: {results}'
                 )
             self.prior = results[0]
+
+
+class ActivationKey(
+    Entity,
+    EntityCreateMixin,
+    EntityDeleteMixin,
+    EntityReadMixin,
+    EntitySearchMixin,
+    EntityUpdateMixin,
+):
+    """A representation of a Activation Key entity."""
+
+    def __init__(self, server_config=None, **kwargs):
+        # Base fields present in all versions
+        self._fields = {
+            'description': entity_fields.StringField(),
+            'host_collection': entity_fields.OneToManyField(HostCollection),
+            'max_hosts': entity_fields.IntegerField(),
+            'name': entity_fields.StringField(
+                required=True, str_type='alpha', length=(6, 12), unique=True
+            ),
+            'organization': entity_fields.OneToOneField(
+                Organization,
+                required=True,
+            ),
+            'purpose_usage': entity_fields.StringField(),
+            'purpose_role': entity_fields.StringField(),
+            'release_version': entity_fields.StringField(),
+            'service_level': entity_fields.StringField(),
+            'unlimited_hosts': entity_fields.BooleanField(),
+        }
+
+        # Add version-conditional fields using feature checker
+        server_version = _get_version(server_config)
+        feature_checker = VersionFeatureChecker(server_version)
+
+        # Add fields based on feature availability
+        if feature_checker.has_feature('api.activation_key.auto_attach'):
+            self._fields['auto_attach'] = entity_fields.BooleanField()
+
+        if feature_checker.has_feature('api.activation_key.content_view'):
+            # single content_view and environment fields
+            self._fields['content_view'] = entity_fields.OneToOneField(ContentView)
+            self._fields['environment'] = entity_fields.OneToOneField(LifecycleEnvironment)
+        else:
+            # multi-CV/env assignment via content_view_environment_ids
+            self._fields['content_view_environment_ids'] = entity_fields.ListField()
+
+        self._meta = {
+            'api_path': 'katello/api/v2/activation_keys',
+        }
+        super().__init__(server_config=server_config, **kwargs)
+
+    def path(self, which=None):
+        """Extend ``nailgun.entity_mixins.Entity.path``.
+
+        The format of the returned path depends on the value of ``which``:
+
+        copy
+            /activation_keys/<id>/copy
+        content_override
+            /activation_keys/<id>/content_override
+        product_content
+            /activation_keys/<id>/product_content
+        releases
+            /activation_keys/<id>/releases
+
+        ``super`` is called otherwise.
+
+        """
+        if which in (
+            'content_override',
+            'copy',
+            'host_collections',
+            'product_content',
+            'releases',
+        ):
+            return f'{super().path(which="self")}/{which}'
+        return super().path(which)
+
+    def read(self, entity=None, attrs=None, ignore=None, params=None):
+        """Read with content view and environment handling.
+
+        Version-based feature-aware behavior:
+        - < 6.20: Use content_view and environment fields
+        - >= 6.20: Use content_view_environments field
+        """
+        if attrs is None:
+            attrs = self.read_json(params=params)
+        if ignore is None:
+            ignore = set()
+
+        # Check version to determine response format
+        server_version = _get_version(self._server_config)
+        feature_checker = VersionFeatureChecker(server_version)
+
+        if feature_checker.has_feature('api.activation_key.content_view'):
+            return super().read(entity, attrs, ignore, params)
+        else:
+            ignore.add('content_view_environment_ids')
+            entity = super().read(entity, attrs, ignore, params)
+            entity.content_view_environments = attrs.get('content_view_environments', [])
+            return entity
+
+    @property
+    def content_view(self):
+        """Get content view.
+
+        Version-based feature-aware behavior:
+        - < 6.20: Get content_view field directly
+        - >= 6.20: Compute the property from content_view_environments
+        """
+        server_version = _get_version(self._server_config)
+        feature_checker = VersionFeatureChecker(server_version)
+
+        if feature_checker.has_feature('api.activation_key.content_view'):
+            return self.__dict__.get('content_view')
+        else:
+            cvenvs = getattr(self, 'content_view_environments', None)
+            if not cvenvs:
+                return None
+            cv_data = cvenvs[0].get('content_view')
+            if not cv_data:
+                return None
+            return ContentView(server_config=self._server_config, id=cv_data['id'])
+
+    @content_view.setter
+    def content_view(self, value):
+        """Set content_view.
+
+        Version-based feature-aware behavior:
+        - < 6.20: Set content_view field directly
+        - >= 6.20: No-op (set from content_view_environments).
+        """
+        server_version = _get_version(self._server_config)
+        feature_checker = VersionFeatureChecker(server_version)
+
+        if feature_checker.has_feature('api.activation_key.content_view'):
+            self.__dict__['content_view'] = value
+        # Else, this is read-only (computed from content_view_environments).
+
+    @property
+    def environment(self):
+        """Get environment.
+
+        Version-based feature-aware behavior:
+        - < 6.20: Get environment directly
+        - >= 6.20: Compute the property from content_view_environments
+        """
+        server_version = _get_version(self._server_config)
+        feature_checker = VersionFeatureChecker(server_version)
+
+        if feature_checker.has_feature('api.activation_key.content_view'):
+            return self.__dict__.get('environment')
+        else:
+            cvenvs = getattr(self, 'content_view_environments', None)
+            if not cvenvs:
+                return None
+            lce_data = cvenvs[0].get('lifecycle_environment')
+            if not lce_data:
+                return None
+            return LifecycleEnvironment(server_config=self._server_config, id=lce_data['id'])
+
+    @environment.setter
+    def environment(self, value):
+        """Set environment.
+
+        Version-based feature-aware behavior:
+        - < 6.20: Set environment field directly
+        - >= 6.20: No-op (set from content_view_environments).
+        """
+        server_version = _get_version(self._server_config)
+        feature_checker = VersionFeatureChecker(server_version)
+
+        if feature_checker.has_feature('api.activation_key.content_view'):
+            self.__dict__['environment'] = value
+        # Else, this is read-only (computed from content_view_environments)
+
+    def update_payload(self, fields=None):
+        """Include organization_id in all payloads."""
+        payload = super().update_payload(fields)
+        payload['organization_id'] = self.organization.id
+        return payload
+
+    def add_host_collection(self, synchronous=True, timeout=None, **kwargs):
+        """Associate host collection with activation key.
+
+        :param synchronous: What should happen if the server returns an HTTP
+            202 (accepted) status code? Wait for the task to complete if
+            ``True``. Immediately return the server's response otherwise.
+        :param timeout: Maximum number of seconds to wait until timing out.
+            Defaults to ``nailgun.entity_mixins.TASK_TIMEOUT``.
+        :param kwargs: Arguments to pass to requests.
+        :returns: The server's response, with all JSON decoded.
+        :raises: ``requests.exceptions.HTTPError`` If the server responds with
+            an HTTP 4XX or 5XX message.
+
+        """
+        kwargs = kwargs.copy()  # shadow the passed-in kwargs
+        kwargs.update(self._server_config.get_client_kwargs())
+        response = client.post(self.path('host_collections'), **kwargs)
+        return _handle_response(response, self._server_config, synchronous, timeout)
+
+    def copy(self, synchronous=True, timeout=None, **kwargs):
+        """Copy provided activation key.
+
+        :param synchronous: What should happen if the server returns an HTTP
+            202 (accepted) status code? Wait for the task to complete if
+            ``True``. Immediately return the server's response otherwise.
+        :param timeout: Maximum number of seconds to wait until timing out.
+            Defaults to ``nailgun.entity_mixins.TASK_TIMEOUT``.
+        :param kwargs: Arguments to pass to requests.
+        :returns: The server's response, with all JSON decoded.
+        :raises: ``requests.exceptions.HTTPError`` If the server responds with
+            an HTTP 4XX or 5XX message.
+
+        """
+        kwargs = kwargs.copy()  # shadow the passed-in kwargs
+        if 'data' in kwargs and 'id' not in kwargs['data']:
+            kwargs['data']['id'] = self.id
+        kwargs.update(self._server_config.get_client_kwargs())
+        response = client.post(self.path('copy'), **kwargs)
+        return _handle_response(response, self._server_config, synchronous, timeout)
+
+    def content_override(self, synchronous=True, timeout=None, **kwargs):
+        """Override the content of an activation key.
+
+        :param synchronous: What should happen if the server returns an HTTP
+            202 (accepted) status code? Wait for the task to complete if
+            ``True``. Immediately return the server's response otherwise.
+        :param timeout: Maximum number of seconds to wait until timing out.
+            Defaults to ``nailgun.entity_mixins.TASK_TIMEOUT``.
+        :param kwargs: Arguments to pass to requests.
+        :returns: The server's response, with all JSON decoded.
+        :raises: ``requests.exceptions.HTTPError`` If the server responds with
+            an HTTP 4XX or 5XX message.
+
+        """
+        kwargs = kwargs.copy()  # shadow the passed-in kwargs
+        kwargs.update(self._server_config.get_client_kwargs())
+        response = client.put(self.path('content_override'), **kwargs)
+        return _handle_response(response, self._server_config, synchronous, timeout)
+
+    def product_content(self, synchronous=True, timeout=None, **kwargs):
+        """Show content available for activation key.
+
+        :param synchronous: What should happen if the server returns an HTTP
+            202 (accepted) status code? Wait for the task to complete if
+            ``True``. Immediately return the server's response otherwise.
+        :param timeout: Maximum number of seconds to wait until timing out.
+            Defaults to ``nailgun.entity_mixins.TASK_TIMEOUT``.
+        :param kwargs: Arguments to pass to requests.
+        :returns: The server's response, with all JSON decoded.
+        :raises: ``requests.exceptions.HTTPError`` If the server responds with
+            an HTTP 4XX or 5XX message.
+
+        """
+        kwargs = kwargs.copy()  # shadow the passed-in kwargs
+        kwargs.update(self._server_config.get_client_kwargs())
+        response = client.get(self.path('product_content'), **kwargs)
+        return _handle_response(response, self._server_config, synchronous, timeout)
+
+    def remove_host_collection(self, synchronous=True, timeout=None, **kwargs):
+        """Disassociate host collection from the activation key.
+
+        :param synchronous: What should happen if the server returns an HTTP
+            202 (accepted) status code? Wait for the task to complete if
+            ``True``. Immediately return the server's response otherwise.
+        :param timeout: Maximum number of seconds to wait until timing out.
+            Defaults to ``nailgun.entity_mixins.TASK_TIMEOUT``.
+        :param kwargs: Arguments to pass to requests.
+        :returns: The server's response, with all JSON decoded.
+        :raises: ``requests.exceptions.HTTPError`` If the server responds with
+            an HTTP 4XX or 5XX message.
+
+        """
+        kwargs = kwargs.copy()  # shadow the passed-in kwargs
+        kwargs.update(self._server_config.get_client_kwargs())
+        response = client.put(self.path('host_collections'), **kwargs)
+        return _handle_response(response, self._server_config, synchronous, timeout)
 
 
 class HTTPProxy(
