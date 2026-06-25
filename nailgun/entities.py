@@ -5659,10 +5659,49 @@ class ActivationKey(
             self.__dict__['environment'] = value
         # Else, this is read-only (computed from content_view_environments)
 
+    def _get_cvenv_id(self, content_view, lifecycle_environment):
+        """Look up ContentViewEnvironment ID from CV + LCE pair.
+
+        Helper for 6.20+ where content_view_environment_ids is used instead
+        of separate content_view and environment fields.
+        """
+        cv_id = content_view.id if hasattr(content_view, 'id') else content_view
+        lce_id = lifecycle_environment.id if hasattr(lifecycle_environment, 'id') else lifecycle_environment
+
+        result = ContentViewEnvironment(server_config=self._server_config).list_content_view_environments(
+            params={'content_view_id': cv_id, 'lifecycle_environment_id': lce_id}
+        )
+        if not result['results']:
+            raise ValueError(
+                f'No ContentViewEnvironment found for content_view_id={cv_id}, '
+                f'lifecycle_environment_id={lce_id}. '
+                f'Has the content view been published and promoted to this environment?'
+            )
+        return result['results'][0]['id']
+
     def update_payload(self, fields=None):
-        """Include organization_id in all payloads."""
+        """Include organization_id and handle version-aware CV/LCE conversion."""
         payload = super().update_payload(fields)
         payload['organization_id'] = self.organization.id
+
+        # Version-aware conversion: content_view + environment → content_view_environment_ids
+        server_version = _get_version(self._server_config)
+        feature_checker = VersionFeatureChecker(server_version)
+
+        if not feature_checker.has_feature('api.activation_key.content_view'):
+            # 6.20+: Convert content_view + environment to content_view_environment_ids
+            # Check if both old-style fields are present
+            cv = self.__dict__.get('content_view')
+            lce = self.__dict__.get('environment')
+
+            if cv and lce:
+                # Remove old fields from payload
+                payload.pop('content_view_id', None)
+                payload.pop('environment_id', None)
+                # Add new field
+                cvenv_id = self._get_cvenv_id(cv, lce)
+                payload['content_view_environment_ids'] = [cvenv_id]
+
         return payload
 
     def add_host_collection(self, synchronous=True, timeout=None, **kwargs):

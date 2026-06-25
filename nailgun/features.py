@@ -99,7 +99,7 @@ class VersionFeatureChecker:
         version='6.18.6', min_version='6.17', max_version='6.18' returns True
         version='6.18', min_version='6.18', max_version='6.19' returns True
         """
-        version_obj = Version(self.satellite_version)
+        version_obj = self.satellite_version if isinstance(self.satellite_version, Version) else Version(self.satellite_version)
 
         next_version = None
         if max_version:
